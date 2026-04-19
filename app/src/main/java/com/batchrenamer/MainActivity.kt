@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
+import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
@@ -21,6 +22,41 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.batchrenamer.databinding.ActivityMainBinding
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+// 日志工具类
+object AppLogger {
+    private const val TAG = "PicRenamer"
+    private val logs = mutableListOf<String>()
+    private val dateFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+    
+    fun i(message: String) {
+        val time = dateFormat.format(Date())
+        val log = "[$time] ℹ️ $message"
+        Log.i(TAG, log)
+        logs.add(log)
+    }
+    
+    fun e(message: String, throwable: Throwable? = null) {
+        val time = dateFormat.format(Date())
+        val log = "[$time] ❌ $message${if (throwable != null) ": ${throwable.message}" else ""}"
+        Log.e(TAG, log, throwable)
+        logs.add(log)
+    }
+    
+    fun w(message: String) {
+        val time = dateFormat.format(Date())
+        val log = "[$time] ⚠️ $message"
+        Log.w(TAG, log)
+        logs.add(log)
+    }
+    
+    fun getLogs(): String = logs.joinToString("\n")
+    
+    fun clear() = logs.clear()
+}
 
 // 简单的数据类
 data class FileInfo(
@@ -58,14 +94,20 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         
         try {
+            AppLogger.i("========== APP 启动 ==========")
+            AppLogger.i("Android 版本：${Build.VERSION.SDK_INT}")
+            AppLogger.i("应用版本：1.0")
+            
             binding = ActivityMainBinding.inflate(layoutInflater)
             setContentView(binding.root)
             
             setupUI()
             setupRecyclerView()
+            
+            AppLogger.i("APP 初始化完成")
         } catch (e: Exception) {
+            AppLogger.e("APP 启动失败", e)
             Toast.makeText(this, "启动失败：${e.message}", Toast.LENGTH_LONG).show()
-            e.printStackTrace()
         }
     }
     
@@ -84,6 +126,10 @@ class MainActivity : AppCompatActivity() {
         
         binding.btnRename.setOnClickListener {
             confirmAndRename()
+        }
+        
+        binding.btnLogs.setOnClickListener {
+            showLogs()
         }
         
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, outputFormats)
@@ -137,41 +183,48 @@ class MainActivity : AppCompatActivity() {
     
     private fun checkPermissionAndPickImages() {
         try {
+            AppLogger.i("用户点击选择图片按钮")
+            
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                AppLogger.i("Android 13+，直接使用图片选择器")
                 pickImagesLauncher.launch("image/*")
             } else {
                 if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) 
                     == PackageManager.PERMISSION_GRANTED) {
+                    AppLogger.i("权限已授予，打开图片选择器")
                     pickImagesLauncher.launch("image/*")
                 } else {
+                    AppLogger.i("请求存储权限")
                     requestPermissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
                 }
             }
         } catch (e: Exception) {
+            AppLogger.e("选择图片失败", e)
             Toast.makeText(this, "选择失败：${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
     
     private fun processSelectedImages(uris: List<Uri>) {
         try {
+            AppLogger.i("开始处理 ${uris.size} 张图片")
             val newItems = mutableListOf<ImageItem>()
             
             for ((index, uri) in uris.withIndex()) {
                 try {
-                    // 直接使用 URI 和文件名，不依赖真实路径
                     val name = getFileNameFromUri(uri) ?: "image_$index.jpg"
                     val size = getFileSizeFromUri(uri)
                     
                     val item = ImageItem(
                         id = System.currentTimeMillis() + index,
                         uri = uri,
-                        path = uri.toString(), // 保存 URI 字符串
+                        path = uri.toString(),
                         name = name,
                         size = size ?: 0
                     )
                     newItems.add(item)
+                    AppLogger.i("[$index] 加载：$name (${item.getSizeString()})")
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    AppLogger.e("加载图片失败 [index=$index]", e)
                 }
             }
             
@@ -179,13 +232,15 @@ class MainActivity : AppCompatActivity() {
                 imageList.addAll(newItems)
                 adapter.submitList(imageList.toList())
                 updateImageCount()
+                AppLogger.i("成功加载 ${newItems.size} 张图片")
                 Toast.makeText(this, "已添加 ${newItems.size} 张图片", Toast.LENGTH_SHORT).show()
             } else {
+                AppLogger.w("未能加载任何图片")
                 Toast.makeText(this, "未能加载图片", Toast.LENGTH_SHORT).show()
             }
         } catch (e: Exception) {
+            AppLogger.e("处理图片失败", e)
             Toast.makeText(this, "处理失败：${e.message}", Toast.LENGTH_SHORT).show()
-            e.printStackTrace()
         }
     }
     
@@ -345,9 +400,9 @@ class MainActivity : AppCompatActivity() {
     
     private fun executeRename(items: List<ImageItem>, params: RenameParams) {
         try {
-            var success = 0
-            var failed = 0
-            val results = mutableListOf<String>()
+            AppLogger.i("========== 开始重命名 ==========")
+            AppLogger.i("图片数量：${items.size}")
+            AppLogger.i("前缀：${params.prefix}, 后缀：${params.suffix}, 位数：${params.length}, 起始：${params.start}, 格式：${params.format}")
             
             // 提示用户选择输出文件夹
             val intent = android.content.Intent(android.app.action.ACTION_OPEN_DOCUMENT_TREE)
@@ -359,6 +414,7 @@ class MainActivity : AppCompatActivity() {
             pendingRenameParams = params
             
         } catch (e: Exception) {
+            AppLogger.e("重命名失败", e)
             Toast.makeText(this, "重命名失败：${e.message}", Toast.LENGTH_LONG).show()
         }
     }
@@ -385,12 +441,10 @@ class MainActivity : AppCompatActivity() {
     private fun executeRenameInFolder(treeUri: Uri, items: List<ImageItem>, params: RenameParams) {
         var success = 0
         var failed = 0
+        val results = mutableListOf<String>()
         
         try {
-            val docFile = android.provider.DocumentsContract.buildDocumentUriUsingTree(
-                treeUri,
-                android.provider.DocumentsContract.getTreeDocumentId(treeUri)
-            )
+            AppLogger.i("选择输出文件夹：$treeUri")
             
             for ((index, item) in items.withIndex()) {
                 try {
@@ -398,7 +452,8 @@ class MainActivity : AppCompatActivity() {
                     val ext = if (params.format == "原格式") item.getExtension() else params.format
                     val newName = "${params.prefix}${num}${params.suffix}.$ext"
                     
-                    // 复制文件到新位置
+                    AppLogger.i("[$index] 处理：${item.name} → $newName")
+                    
                     val newDocUri = android.provider.DocumentsContract.createFile(
                         contentResolver,
                         treeUri,
@@ -407,7 +462,6 @@ class MainActivity : AppCompatActivity() {
                     )
                     
                     if (newDocUri != null) {
-                        // 读取原文件
                         val inputStream = contentResolver.openInputStream(item.uri)
                         val outputStream = contentResolver.openOutputStream(newDocUri)
                         
@@ -418,16 +472,24 @@ class MainActivity : AppCompatActivity() {
                         }
                         
                         success++
+                        results.add("✅ ${item.name} → $newName")
+                        AppLogger.i("[$index] 成功：$newName")
                     } else {
                         failed++
+                        results.add("❌ ${item.name}: 创建文件失败")
+                        AppLogger.e("[$index] 创建文件失败：$newName")
                     }
                 } catch (e: Exception) {
                     failed++
-                    e.printStackTrace()
+                    results.add("❌ ${item.name}: ${e.message}")
+                    AppLogger.e("[$index] 处理失败：${item.name}", e)
                 }
             }
             
-            val message = "重命名完成！\n成功：$success\n失败：$failed"
+            AppLogger.i("========== 重命名完成 ==========")
+            AppLogger.i("成功：$success, 失败：$failed")
+            
+            val message = "重命名完成！\n成功：$success\n失败：$failed\n\n${results.joinToString("\n")}"
             AlertDialog.Builder(this)
                 .setTitle("结果")
                 .setMessage(message)
@@ -436,10 +498,27 @@ class MainActivity : AppCompatActivity() {
                     adapter.submitList(emptyList())
                     updateImageCount()
                 }
+                .setNeutralButton("查看日志") { _, _ ->
+                    showLogs()
+                }
                 .show()
         } catch (e: Exception) {
+            AppLogger.e("重命名异常", e)
             Toast.makeText(this, "重命名失败：${e.message}", Toast.LENGTH_LONG).show()
         }
+    }
+    
+    private fun showLogs() {
+        val logs = AppLogger.getLogs()
+        AlertDialog.Builder(this)
+            .setTitle("操作日志")
+            .setMessage(logs.ifEmpty { "暂无日志" })
+            .setPositiveButton("确定", null)
+            .setNegativeButton("清空") { _, _ ->
+                AppLogger.clear()
+                Toast.makeText(this, "日志已清空", Toast.LENGTH_SHORT).show()
+            }
+            .show()
     }
     
     data class RenameParams(
