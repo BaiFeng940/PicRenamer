@@ -207,6 +207,16 @@
                     android:layout_weight="1"
                     android:text="开始重命名" />
             </LinearLayout>
+            
+            <!-- 日志按钮 -->
+            <Button
+                android:id="@+id/btnLogs"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="查看日志"
+                android:textSize="12sp"
+                style="@style/Widget.MaterialComponents.Button.TextButton" />
         </LinearLayout>
     </com.google.android.material.card.MaterialCardView>
 </LinearLayout>
