@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">图片批量重命名</string>
+    <string name="select_folder">选择文件夹</string>
+    <string name="selected_folder">已选文件夹</string>
+    <string name="change_folder">更改</string>
+    <string name="preview">预览</string>
+    <string name="rename">开始重命名</string>
+    <string name="settings">重命名设置</string>
+    <string name="prefix">前缀</string>
+    <string name="suffix">后缀</string>
+    <string name="name_length">名称长度</string>
+    <string name="start_number">起始编号</string>
+    <string name="output_format">输出格式</string>
+    <string name="preview_title">预览结果</string>
+    <string name="rename_success">重命名完成！</string>
+    <string name="rename_failed">重命名失败</string>
+    <string name="no_files">未找到图片文件</string>
+    <string name="confirm_rename">确认重命名</string>
+    <string name="cancel">取消</string>
+    <string name="ok">确定</string>
+    <string name="file_count">共 %d 个文件</string>
+    <string name="example">示例：A001.jpg</string>
+</resources>
