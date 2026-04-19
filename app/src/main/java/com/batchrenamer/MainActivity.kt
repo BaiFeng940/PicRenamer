@@ -61,9 +61,6 @@ class MainActivity : AppCompatActivity() {
             binding = ActivityMainBinding.inflate(layoutInflater)
             setContentView(binding.root)
             
-            setSupportActionBar(binding.toolbar)
-            supportActionBar?.title = "图片批量重命名"
-            
             setupUI()
             setupRecyclerView()
         } catch (e: Exception) {
