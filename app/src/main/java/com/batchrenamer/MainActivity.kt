@@ -389,26 +389,17 @@ class MainActivity : AppCompatActivity() {
             AppLogger.i("图片数量：${items.size}")
             AppLogger.i("前缀：${params.prefix}, 后缀：${params.suffix}, 位数：${params.length}, 起始：${params.start}, 格式：${params.format}")
             
-            // 使用第一个图片的目录作为输出目录
-            val firstItem = items.firstOrNull()
-            if (firstItem == null) {
+            if (items.isEmpty()) {
                 Toast.makeText(this, "没有图片", Toast.LENGTH_SHORT).show()
                 return
             }
             
-            // 尝试获取输出目录
-            val outputDir = getOutputDirectory(firstItem)
-            if (outputDir == null) {
-                Toast.makeText(this, "无法确定输出目录", Toast.LENGTH_SHORT).show()
-                AppLogger.e("无法确定输出目录")
-                return
-            }
-            
-            AppLogger.i("输出目录：$outputDir")
+            AppLogger.i("输出目录：Pictures/PicRenamer/")
             
             var success = 0
             var failed = 0
             val results = mutableListOf<String>()
+            val createdUris = mutableListOf<Uri>()
             
             for ((index, item) in items.withIndex()) {
                 try {
@@ -418,33 +409,11 @@ class MainActivity : AppCompatActivity() {
                     
                     AppLogger.i("[$index] 处理：${item.name} → $newName")
                     
-                    val newFile = File(outputDir, newName)
-                    
-                    // 处理文件名冲突
-                    var finalFile = newFile
-                    var counter = 1
-                    while (finalFile.exists()) {
-                        val baseName = newFile.nameWithoutExtension
-                        finalFile = File(outputDir, "${baseName}_$counter.$ext")
-                        counter++
-                    }
-                    
-                    // 使用 ContentResolver 复制文件（支持 content:// URI）
-                    if (copyFileFromUri(item.uri, finalFile)) {
+                    // 使用 MediaStore 复制文件
+                    if (copyFileFromUri(item.uri, newName, android.net.Uri.EMPTY)) {
                         success++
-                        results.add("✅ ${item.name} → ${finalFile.name}")
-                        AppLogger.i("[$index] 成功：${finalFile.name}")
-                        
-                        // 尝试删除原文件（如果有权限）
-                        try {
-                            val oldFile = File(item.path)
-                            if (oldFile.exists() && oldFile != finalFile) {
-                                oldFile.delete()
-                                AppLogger.i("已删除原文件：${oldFile.name}")
-                            }
-                        } catch (e: Exception) {
-                            AppLogger.w("无法删除原文件：${e.message}")
-                        }
+                        results.add("✅ ${item.name} → $newName")
+                        AppLogger.i("[$index] 成功：$newName")
                     } else {
                         failed++
                         results.add("❌ ${item.name}: 复制失败")
@@ -460,7 +429,7 @@ class MainActivity : AppCompatActivity() {
             AppLogger.i("========== 重命名完成 ==========")
             AppLogger.i("成功：$success, 失败：$failed")
             
-            val message = "重命名完成！\n成功：$success\n失败：$failed"
+            val message = "重命名完成！\n成功：$success\n失败：$failed\n\n文件保存在：Pictures/PicRenamer/ 文件夹"
             AlertDialog.Builder(this)
                 .setTitle("结果")
                 .setMessage(message)
@@ -479,39 +448,59 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    private fun getOutputDirectory(firstItem: ImageItem): File? {
-        // 尝试从路径获取目录
-        if (firstItem.path.startsWith("/")) {
-            val file = File(firstItem.path)
-            if (file.exists()) {
-                return file.parentFile
+    private fun getOutputDirectory(firstItem: ImageItem): Uri? {
+        // 使用 MediaStore 获取图片目录的 URI
+        return try {
+            val contentValues = android.content.ContentValues()
+            contentValues.put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, "temp.jpg")
+            contentValues.put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            
+            val uri = contentResolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+            if (uri != null) {
+                // 删除临时文件，只获取目录
+                contentResolver.delete(uri, null, null)
+                
+                // 返回外部存储的 URI
+                android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            } else {
+                null
             }
+        } catch (e: Exception) {
+            AppLogger.e("获取输出目录失败", e)
+            null
         }
-        
-        // 尝试使用外部存储目录
-        val externalDirs = getExternalFilesDirs(null)
-        if (externalDirs.isNotEmpty() && externalDirs[0] != null) {
-            val downloadDir = File(externalDirs[0], "RenamedImages")
-            if (!downloadDir.exists()) {
-                downloadDir.mkdirs()
-            }
-            AppLogger.i("使用备用目录：$downloadDir")
-            return downloadDir
-        }
-        
-        return null
     }
     
-    private fun copyFileFromUri(uri: Uri, destination: File): Boolean {
+    private fun copyFileFromUri(sourceUri: Uri, destinationName: String, outputDir: Uri): Boolean {
         return try {
-            // 使用 ContentResolver 打开输入流（支持 content:// 和 file://）
-            val inputStream = contentResolver.openInputStream(uri)
-            if (inputStream == null) {
-                AppLogger.e("无法打开输入流：$uri")
+            // 使用 MediaStore 创建新文件
+            val contentValues = android.content.ContentValues()
+            contentValues.put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, destinationName)
+            contentValues.put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            contentValues.put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/PicRenamer/")
+            
+            val destUri = contentResolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+            if (destUri == null) {
+                AppLogger.e("无法创建目标文件：$destinationName")
                 return false
             }
             
-            val outputStream = FileOutputStream(destination)
+            // 复制文件内容
+            val inputStream = contentResolver.openInputStream(sourceUri)
+            val outputStream = contentResolver.openOutputStream(destUri)
+            
+            if (inputStream == null) {
+                AppLogger.e("无法打开源文件输入流")
+                contentResolver.delete(destUri, null, null)
+                return false
+            }
+            
+            if (outputStream == null) {
+                AppLogger.e("无法打开目标文件输出流")
+                inputStream.close()
+                contentResolver.delete(destUri, null, null)
+                return false
+            }
             
             inputStream.use { input ->
                 outputStream.use { output ->
@@ -519,10 +508,10 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             
-            AppLogger.i("复制成功：${destination.name}")
+            AppLogger.i("复制成功：$destinationName -> $destUri")
             true
         } catch (e: Exception) {
-            AppLogger.e("复制文件失败：${destination.name}", e)
+            AppLogger.e("复制文件失败：$destinationName", e)
             false
         }
     }
