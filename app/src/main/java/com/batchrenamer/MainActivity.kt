@@ -406,8 +406,8 @@ class MainActivity : AppCompatActivity() {
             AppLogger.i("前缀：${params.prefix}, 后缀：${params.suffix}, 位数：${params.length}, 起始：${params.start}, 格式：${params.format}")
             
             // 提示用户选择输出文件夹
-            val intent = android.content.Intent(android.app.action.ACTION_OPEN_DOCUMENT_TREE)
-            intent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
             folderPickerLauncher.launch(intent)
             
             // 保存参数以便后续使用
@@ -455,10 +455,10 @@ class MainActivity : AppCompatActivity() {
                     
                     AppLogger.i("[$index] 处理：${item.name} → $newName")
                     
-                    val newDocUri = android.provider.DocumentsContract.createFile(
+                    val newDocUri = DocumentsContract.createFile(
                         contentResolver,
                         treeUri,
-                        "image/$ext",
+                        "image/*",
                         newName
                     )
                     
