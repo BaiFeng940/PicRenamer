@@ -6,7 +6,6 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.util.Log
 import android.view.View
@@ -23,6 +22,8 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.batchrenamer.databinding.ActivityMainBinding
 import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -80,6 +81,8 @@ class MainActivity : AppCompatActivity() {
     ) { uris ->
         if (uris.isNotEmpty()) {
             processSelectedImages(uris)
+        } else {
+            Toast.makeText(this, "未选择图片", Toast.LENGTH_SHORT).show()
         }
     }
     
@@ -214,16 +217,17 @@ class MainActivity : AppCompatActivity() {
                 try {
                     val name = getFileNameFromUri(uri) ?: "image_$index.jpg"
                     val size = getFileSizeFromUri(uri)
+                    val realPath = getRealPathFromUri(uri)
                     
                     val item = ImageItem(
                         id = System.currentTimeMillis() + index,
                         uri = uri,
-                        path = uri.toString(),
+                        path = realPath ?: uri.toString(),
                         name = name,
                         size = size ?: 0
                     )
                     newItems.add(item)
-                    AppLogger.i("[$index] 加载：$name (${item.getSizeString()})")
+                    AppLogger.i("[$index] 加载：$name (${item.getSizeString()}) - 路径：${realPath ?: "URI only"}")
                 } catch (e: Exception) {
                     AppLogger.e("加载图片失败 [index=$index]", e)
                 }
@@ -273,28 +277,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    private fun getFileInfo(uri: Uri): FileInfo? {
-        return try {
-            val cursor = contentResolver.query(uri, null, null, null, null)
-            cursor?.use {
-                if (it.moveToFirst()) {
-                    val idIdx = it.getColumnIndex("_id")
-                    val nameIdx = it.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME)
-                    val sizeIdx = it.getColumnIndexOrThrow(OpenableColumns.SIZE)
-                    
-                    val id = if (idIdx >= 0) it.getLong(idIdx) else 0
-                    val name = it.getString(nameIdx)
-                    val size = it.getLong(sizeIdx)
-                    
-                    FileInfo(id, "", name, size)
-                } else null
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
-        }
-    }
-    
     private fun getRealPathFromUri(uri: Uri): String? {
         return try {
             val cursor = contentResolver.query(uri, null, null, null, null)
@@ -315,7 +297,6 @@ class MainActivity : AppCompatActivity() {
             return
         }
         
-        // 简单排序：按文件名中的数字排序
         val sorted = imageList.sortedWith(compareBy { item ->
             extractNumberFromText(item.getNameWithoutExtension())
         })
@@ -405,51 +386,33 @@ class MainActivity : AppCompatActivity() {
             AppLogger.i("图片数量：${items.size}")
             AppLogger.i("前缀：${params.prefix}, 后缀：${params.suffix}, 位数：${params.length}, 起始：${params.start}, 格式：${params.format}")
             
-            // 提示用户选择输出文件夹
-            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-            folderPickerLauncher.launch(intent)
+            // 检查是否有真实路径
+            val itemsWithPath = items.filter { File(it.path).exists() }
             
-            // 保存参数以便后续使用
-            pendingRenameItems = items
-            pendingRenameParams = params
-            
-        } catch (e: Exception) {
-            AppLogger.e("重命名失败", e)
-            Toast.makeText(this, "重命名失败：${e.message}", Toast.LENGTH_LONG).show()
-        }
-    }
-    
-    private var pendingRenameItems: List<ImageItem> = emptyList()
-    private var pendingRenameParams: RenameParams? = null
-    
-    private val folderPickerLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == RESULT_OK && result.data != null) {
-            val treeUri = result.data?.data
-            if (treeUri != null && pendingRenameParams != null) {
-                // 获取持久化权限
-                contentResolver.takePersistableUriPermission(
-                    treeUri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                )
-                
-                // 执行重命名（复制到新文件夹）
-                executeRenameInFolder(treeUri, pendingRenameItems!!, pendingRenameParams!!)
+            if (itemsWithPath.isEmpty()) {
+                Toast.makeText(this, "没有可访问的图片文件", Toast.LENGTH_LONG).show()
+                AppLogger.w("没有可访问的图片文件")
+                return
             }
-        }
-    }
-    
-    private fun executeRenameInFolder(treeUri: Uri, items: List<ImageItem>, params: RenameParams) {
-        var success = 0
-        var failed = 0
-        val results = mutableListOf<String>()
-        
-        try {
-            AppLogger.i("选择输出文件夹：$treeUri")
             
-            for ((index, item) in items.withIndex()) {
+            if (itemsWithPath.size < items.size) {
+                Toast.makeText(this, "部分图片无法访问，将跳过 ${items.size - itemsWithPath.size} 张", Toast.LENGTH_SHORT).show()
+            }
+            
+            // 直接使用原文件夹，不选择新文件夹
+            val outputDir = File(itemsWithPath[0].path).parentFile
+            if (outputDir == null) {
+                Toast.makeText(this, "无法确定输出目录", Toast.LENGTH_SHORT).show()
+                return
+            }
+            
+            AppLogger.i("输出目录：$outputDir")
+            
+            var success = 0
+            var failed = 0
+            val results = mutableListOf<String>()
+            
+            for ((index, item) in itemsWithPath.withIndex()) {
                 try {
                     val num = (params.start + index).toString().padStart(params.length, '0')
                     val ext = if (params.format == "原格式") item.getExtension() else params.format
@@ -457,30 +420,32 @@ class MainActivity : AppCompatActivity() {
                     
                     AppLogger.i("[$index] 处理：${item.name} → $newName")
                     
-                    val newDocUri = android.provider.DocumentsContract.createFile(
-                        contentResolver,
-                        treeUri,
-                        "image/*",
-                        newName
-                    )
+                    val oldFile = File(item.path)
+                    val newFile = File(outputDir, newName)
                     
-                    if (newDocUri != null) {
-                        val inputStream = contentResolver.openInputStream(item.uri)
-                        val outputStream = contentResolver.openOutputStream(newDocUri)
-                        
-                        inputStream?.use { input ->
-                            outputStream?.use { output ->
-                                input.copyTo(output)
-                            }
-                        }
-                        
+                    // 处理文件名冲突
+                    var finalFile = newFile
+                    var counter = 1
+                    while (finalFile.exists() && finalFile != oldFile) {
+                        val baseName = newFile.nameWithoutExtension
+                        finalFile = File(outputDir, "${baseName}_$counter.$ext")
+                        counter++
+                    }
+                    
+                    // 复制文件而不是重命名（更安全）
+                    if (copyFile(oldFile, finalFile)) {
                         success++
-                        results.add("✅ ${item.name} → $newName")
-                        AppLogger.i("[$index] 成功：$newName")
+                        results.add("✅ ${item.name} → ${finalFile.name}")
+                        AppLogger.i("[$index] 成功：${finalFile.name}")
+                        
+                        // 删除原文件
+                        if (oldFile != finalFile) {
+                            oldFile.delete()
+                        }
                     } else {
                         failed++
-                        results.add("❌ ${item.name}: 创建文件失败")
-                        AppLogger.e("[$index] 创建文件失败：$newName")
+                        results.add("❌ ${item.name}: 复制失败")
+                        AppLogger.e("[$index] 复制失败")
                     }
                 } catch (e: Exception) {
                     failed++
@@ -492,7 +457,7 @@ class MainActivity : AppCompatActivity() {
             AppLogger.i("========== 重命名完成 ==========")
             AppLogger.i("成功：$success, 失败：$failed")
             
-            val message = "重命名完成！\n成功：$success\n失败：$failed\n\n${results.joinToString("\n")}"
+            val message = "重命名完成！\n成功：$success\n失败：$failed"
             AlertDialog.Builder(this)
                 .setTitle("结果")
                 .setMessage(message)
@@ -508,6 +473,22 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             AppLogger.e("重命名异常", e)
             Toast.makeText(this, "重命名失败：${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+    
+    private fun copyFile(source: File, destination: File): Boolean {
+        return try {
+            val input = FileInputStream(source)
+            val output = FileOutputStream(destination)
+            input.use { input ->
+                output.use { output ->
+                    input.copyTo(output)
+                }
+            }
+            true
+        } catch (e: Exception) {
+            AppLogger.e("复制文件失败：${source.name} → ${destination.name}", e)
+            false
         }
     }
     
