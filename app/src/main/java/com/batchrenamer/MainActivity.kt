@@ -19,12 +19,10 @@ import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.batchrenamer.databinding.ActivityMainBinding
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.io.File
+import java.io.FileInputStream
 
-// 简单的数据类替代 Quad
+// 简单的数据类
 data class FileInfo(
     val id: Long,
     val path: String,
@@ -40,103 +38,93 @@ class MainActivity : AppCompatActivity() {
     
     private val outputFormats = arrayOf("jpg", "png", "webp", "bmp", "原格式")
     
-    // 图片选择器
     private val pickImagesLauncher = registerForActivityResult(
         ActivityResultContracts.GetMultipleContents()
     ) { uris ->
         if (uris.isNotEmpty()) {
             processSelectedImages(uris)
-        } else {
-            Toast.makeText(this, "未选择图片", Toast.LENGTH_SHORT).show()
         }
     }
     
-    // 权限请求
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
             pickImagesLauncher.launch("image/*")
-        } else {
-            Toast.makeText(this, "需要存储权限才能选择图片", Toast.LENGTH_SHORT).show()
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(binding.root)
         
-        // 设置 Toolbar
-        setSupportActionBar(binding.toolbar)
-        supportActionBar?.title = "图片批量重命名"
-        supportActionBar?.setDisplayHomeAsUpEnabled(false)
-        
-        setupUI()
-        setupRecyclerView()
+        try {
+            binding = ActivityMainBinding.inflate(layoutInflater)
+            setContentView(binding.root)
+            
+            setSupportActionBar(binding.toolbar)
+            supportActionBar?.title = "图片批量重命名"
+            
+            setupUI()
+            setupRecyclerView()
+        } catch (e: Exception) {
+            Toast.makeText(this, "启动失败：${e.message}", Toast.LENGTH_LONG).show()
+            e.printStackTrace()
+        }
     }
     
     private fun setupUI() {
-        // 选择图片按钮
         binding.btnSelectImages.setOnClickListener {
             checkPermissionAndPickImages()
         }
         
-        // 智能排序
         binding.btnSmartSort.setOnClickListener {
             smartSortImages()
         }
         
-        // 预览
         binding.btnPreview.setOnClickListener {
             showPreview()
         }
         
-        // 重命名
         binding.btnRename.setOnClickListener {
             confirmAndRename()
         }
         
-        // 输出格式 Spinner
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, outputFormats)
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         binding.spinnerFormat.adapter = adapter
     }
     
     private fun setupRecyclerView() {
-        adapter = ImageAdapter(
-            onItemClick = { item, position ->
-                // 点击切换选择状态
-                item.isSelected = !item.isSelected
-                adapter.notifyItemChanged(position)
-                updateImageCount()
-            },
-            onSelectionChanged = { item, isSelected ->
-                item.isSelected = isSelected
-                updateImageCount()
-            }
-        )
-        
-        binding.rvImages.layoutManager = LinearLayoutManager(this)
-        binding.rvImages.adapter = adapter
-        
-        // 添加拖拽排序
-        setupItemTouchHelper()
+        try {
+            adapter = ImageAdapter(
+                onItemClick = { item, position ->
+                    item.isSelected = !item.isSelected
+                    adapter.notifyItemChanged(position)
+                    updateImageCount()
+                },
+                onSelectionChanged = { item, isSelected ->
+                    item.isSelected = isSelected
+                    updateImageCount()
+                }
+            )
+            
+            binding.rvImages.layoutManager = LinearLayoutManager(this)
+            binding.rvImages.adapter = adapter
+            
+            setupItemTouchHelper()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
     
     private fun setupItemTouchHelper() {
         val itemTouchHelper = ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(
             ItemTouchHelper.UP or ItemTouchHelper.DOWN, 0
         ) {
-            override fun onMove(
-                recyclerView: RecyclerView,
-                viewHolder: RecyclerView.ViewHolder,
-                target: RecyclerView.ViewHolder
-            ): Boolean {
+            override fun onMove(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder): Boolean {
                 val fromPosition = viewHolder.adapterPosition
                 val toPosition = target.adapterPosition
                 
-                // 交换列表中的元素
                 val temp = imageList[fromPosition]
                 imageList[fromPosition] = imageList[toPosition]
                 imageList[toPosition] = temp
@@ -145,9 +133,7 @@ class MainActivity : AppCompatActivity() {
                 return true
             }
             
-            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
-                // 不支持滑动删除
-            }
+            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {}
         })
         itemTouchHelper.attachToRecyclerView(binding.rvImages)
     }
@@ -155,10 +141,8 @@ class MainActivity : AppCompatActivity() {
     private fun checkPermissionAndPickImages() {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                // Android 13+ - 不需要请求权限，直接使用选择器
                 pickImagesLauncher.launch("image/*")
             } else {
-                // Android 12 及以下
                 if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) 
                     == PackageManager.PERMISSION_GRANTED) {
                     pickImagesLauncher.launch("image/*")
@@ -167,25 +151,22 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         } catch (e: Exception) {
-            Toast.makeText(this, "选择图片失败：${e.message}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "选择失败：${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
     
     private fun processSelectedImages(uris: List<Uri>) {
-        showLoading("正在加载图片...")
-        
-        // 在新线程中处理
-        Thread {
+        try {
             val newItems = mutableListOf<ImageItem>()
             
-            for (uri in uris) {
+            for ((index, uri) in uris.withIndex()) {
                 try {
                     val fileInfo = getFileInfo(uri)
                     if (fileInfo != null) {
                         val item = ImageItem(
-                            id = fileInfo.id,
+                            id = fileInfo.id + index,
                             uri = uri,
-                            path = fileInfo.path,
+                            path = getRealPathFromUri(uri) ?: uri.toString(),
                             name = fileInfo.name,
                             size = fileInfo.size
                         )
@@ -196,18 +177,16 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             
-            runOnUiThread {
+            if (newItems.isNotEmpty()) {
                 imageList.addAll(newItems)
                 adapter.submitList(imageList.toList())
                 updateImageCount()
-                hideLoading()
-                
-                // 自动检测数字
-                if (newItems.isNotEmpty()) {
-                    detectNumbersInImages(newItems)
-                }
+                Toast.makeText(this, "已添加 ${newItems.size} 张图片", Toast.LENGTH_SHORT).show()
             }
-        }.start()
+        } catch (e: Exception) {
+            Toast.makeText(this, "处理失败：${e.message}", Toast.LENGTH_SHORT).show()
+            e.printStackTrace()
+        }
     }
     
     private fun getFileInfo(uri: Uri): FileInfo? {
@@ -215,14 +194,15 @@ class MainActivity : AppCompatActivity() {
             val cursor = contentResolver.query(uri, null, null, null, null)
             cursor?.use {
                 if (it.moveToFirst()) {
-                    val id = it.getLong(it.getColumnIndexOrThrow("_id"))
-                    val displayName = it.getString(it.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME))
-                    val size = it.getLong(it.getColumnIndexOrThrow(OpenableColumns.SIZE))
+                    val idIdx = it.getColumnIndex("_id")
+                    val nameIdx = it.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME)
+                    val sizeIdx = it.getColumnIndexOrThrow(OpenableColumns.SIZE)
                     
-                    // 获取真实路径
-                    val path = getRealPathFromUri(uri) ?: uri.path ?: ""
+                    val id = if (idIdx >= 0) it.getLong(idIdx) else 0
+                    val name = it.getString(nameIdx)
+                    val size = it.getLong(sizeIdx)
                     
-                    FileInfo(id, path, displayName, size)
+                    FileInfo(id, "", name, size)
                 } else null
             }
         } catch (e: Exception) {
@@ -237,7 +217,7 @@ class MainActivity : AppCompatActivity() {
             cursor?.use {
                 if (it.moveToFirst()) {
                     val idx = it.getColumnIndex("_data")
-                    if (idx != -1) it.getString(idx) else null
+                    if (idx >= 0) it.getString(idx) else null
                 } else null
             }
         } catch (e: Exception) {
@@ -245,82 +225,33 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    private fun detectNumbersInImages(images: List<ImageItem>) {
-        showLoading("正在识别图片数字...")
-        
-        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-        var processed = 0
-        
-        for (item in images) {
-            try {
-                val file = File(item.path)
-                if (file.exists()) {
-                    val image = InputImage.fromFilePath(this, Uri.fromFile(file))
-                    recognizer.process(image)
-                        .addOnSuccessListener { visionText ->
-                            // 从识别的文本中提取数字
-                            val number = extractNumberFromText(visionText.text)
-                            item.detectedNumber = number
-                            
-                            processed++
-                            if (processed == images.size) {
-                                adapter.submitList(imageList.toList())
-                                hideLoading()
-                            }
-                        }
-                        .addOnFailureListener {
-                            processed++
-                            if (processed == images.size) {
-                                hideLoading()
-                            }
-                        }
-                } else {
-                    processed++
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                processed++
-            }
-        }
-        
-        if (processed == images.size) {
-            hideLoading()
-        }
-    }
-    
-    private fun extractNumberFromText(text: String): Int? {
-        // 从文本中提取数字（支持多种格式）
-        val regex = Regex("\\d+")
-        val matches = regex.findAll(text)
-        
-        // 尝试找到最可能是标识符的数字
-        for (match in matches) {
-            val num = match.value.toIntOrNull()
-            if (num != null && num > 0 && num < 100000) {
-                return num
-            }
-        }
-        
-        return null
-    }
-    
     private fun smartSortImages() {
-        // 按检测到的数字排序
-        val sorted = imageList.sortedWith(compareBy({ it.detectedNumber == null }, { it.detectedNumber ?: 0 }))
+        if (imageList.isEmpty()) {
+            Toast.makeText(this, "请先选择图片", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        // 简单排序：按文件名中的数字排序
+        val sorted = imageList.sortedWith(compareBy { item ->
+            extractNumberFromText(item.getNameWithoutExtension())
+        })
         
         imageList.clear()
         imageList.addAll(sorted)
         adapter.submitList(imageList.toList())
         
-        val detectedCount = imageList.count { it.detectedNumber != null }
-        Toast.makeText(this, "已按检测到的数字排序（$detectedCount 张图片有数字标识）", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "已按文件名排序", Toast.LENGTH_SHORT).show()
+    }
+    
+    private fun extractNumberFromText(text: String): Int {
+        val regex = Regex("\\d+")
+        return regex.findAll(text).firstOrNull()?.value?.toIntOrNull() ?: 0
     }
     
     private fun updateImageCount() {
         val selectedCount = imageList.count { it.isSelected }
         binding.tvImageCount.text = "已选择 $selectedCount / ${imageList.size} 张图片"
         
-        // 更新空视图
         if (imageList.isEmpty()) {
             binding.emptyView.visibility = View.VISIBLE
             binding.rvImages.visibility = View.GONE
@@ -350,7 +281,6 @@ class MainActivity : AppCompatActivity() {
             Pair(item.name, newName)
         }
         
-        // 显示预览对话框
         val builder = AlertDialog.Builder(this)
             .setTitle("重命名预览")
             .setAdapter(PreviewAdapter(previewList), null)
@@ -375,10 +305,10 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun getRenameParams(): RenameParams {
-        val prefix = binding.etPrefix.text.toString()
-        val suffix = binding.etSuffix.text.toString()
-        val length = binding.etNameLength.text.toString().toIntOrNull() ?: 3
-        val start = binding.etStartNumber.text.toString().toIntOrNull() ?: 1
+        val prefix = binding.etPrefix.text?.toString() ?: ""
+        val suffix = binding.etSuffix.text?.toString() ?: ""
+        val length = binding.etNameLength.text?.toString()?.toIntOrNull() ?: 3
+        val start = binding.etStartNumber.text?.toString()?.toIntOrNull() ?: 1
         val formatPos = binding.spinnerFormat.selectedItemPosition
         val format = outputFormats[formatPos]
         
@@ -386,9 +316,7 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun executeRename(items: List<ImageItem>, params: RenameParams) {
-        showLoading("正在重命名...")
-        
-        Thread {
+        try {
             var success = 0
             var failed = 0
             val results = mutableListOf<String>()
@@ -402,7 +330,6 @@ class MainActivity : AppCompatActivity() {
                     val oldFile = File(item.path)
                     val newFile = File(oldFile.parent, newName)
                     
-                    // 处理文件名冲突
                     var finalFile = newFile
                     var counter = 1
                     while (finalFile.exists() && finalFile != oldFile) {
@@ -424,31 +351,19 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             
-            runOnUiThread {
-                hideLoading()
-                
-                val message = "重命名完成！\n成功：$success\n失败：$failed\n\n" + results.joinToString("\n")
-                AlertDialog.Builder(this)
-                    .setTitle("重命名结果")
-                    .setMessage(message)
-                    .setPositiveButton("确定") { _, _ ->
-                        // 清空列表
-                        imageList.clear()
-                        adapter.submitList(emptyList())
-                        updateImageCount()
-                    }
-                    .show()
-            }
-        }.start()
-    }
-    
-    private fun showLoading(message: String) {
-        // 简单实现，可以用 ProgressDialog
-        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-    }
-    
-    private fun hideLoading() {
-        // 隐藏加载提示
+            val message = "重命名完成！\n成功：$success\n失败：$failed"
+            AlertDialog.Builder(this)
+                .setTitle("结果")
+                .setMessage(message)
+                .setPositiveButton("确定") { _, _ ->
+                    imageList.clear()
+                    adapter.submitList(emptyList())
+                    updateImageCount()
+                }
+                .show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "重命名失败：${e.message}", Toast.LENGTH_LONG).show()
+        }
     }
     
     data class RenameParams(
