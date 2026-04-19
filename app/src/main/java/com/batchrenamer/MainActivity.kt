@@ -46,6 +46,8 @@ class MainActivity : AppCompatActivity() {
     ) { uris ->
         if (uris.isNotEmpty()) {
             processSelectedImages(uris)
+        } else {
+            Toast.makeText(this, "未选择图片", Toast.LENGTH_SHORT).show()
         }
     }
     
@@ -64,6 +66,11 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        
+        // 设置 Toolbar
+        setSupportActionBar(binding.toolbar)
+        supportActionBar?.title = "图片批量重命名"
+        supportActionBar?.setDisplayHomeAsUpEnabled(false)
         
         setupUI()
         setupRecyclerView()
@@ -146,22 +153,21 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun checkPermissionAndPickImages() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // Android 13+
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) 
-                == PackageManager.PERMISSION_GRANTED) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                // Android 13+ - 不需要请求权限，直接使用选择器
                 pickImagesLauncher.launch("image/*")
             } else {
-                requestPermissionLauncher.launch(Manifest.permission.READ_MEDIA_IMAGES)
+                // Android 12 及以下
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) 
+                    == PackageManager.PERMISSION_GRANTED) {
+                    pickImagesLauncher.launch("image/*")
+                } else {
+                    requestPermissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
+                }
             }
-        } else {
-            // Android 12 及以下
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) 
-                == PackageManager.PERMISSION_GRANTED) {
-                pickImagesLauncher.launch("image/*")
-            } else {
-                requestPermissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
-            }
+        } catch (e: Exception) {
+            Toast.makeText(this, "选择图片失败：${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
     
