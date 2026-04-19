@@ -7,7 +7,9 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.view.View
+import android.view.ViewGroup
 import android.widget.ArrayAdapter
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
@@ -15,11 +17,20 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.batchrenamer.databinding.ActivityMainBinding
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.io.File
+
+// 简单的数据类替代 Quad
+data class FileInfo(
+    val id: Long,
+    val path: String,
+    val name: String,
+    val size: Long
+)
 
 class MainActivity : AppCompatActivity() {
 
@@ -193,7 +204,7 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
     
-    private fun getFileInfo(uri: Uri): Quad<Long, String, String, Long>? {
+    private fun getFileInfo(uri: Uri): FileInfo? {
         return try {
             val cursor = contentResolver.query(uri, null, null, null, null)
             cursor?.use {
@@ -205,7 +216,7 @@ class MainActivity : AppCompatActivity() {
                     // 获取真实路径
                     val path = getRealPathFromUri(uri) ?: uri.path ?: ""
                     
-                    Quad(id, path, displayName, size)
+                    FileInfo(id, path, displayName, size)
                 } else null
             }
         } catch (e: Exception) {
@@ -238,7 +249,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 val file = File(item.path)
                 if (file.exists()) {
-                    val image = InputImage.fromFilePath(this, file)
+                    val image = InputImage.fromFilePath(this, Uri.fromFile(file))
                     recognizer.process(image)
                         .addOnSuccessListener { visionText ->
                             // 从识别的文本中提取数字
@@ -445,11 +456,11 @@ class MainActivity : AppCompatActivity() {
     inner class PreviewAdapter(
         private val items: List<Pair<String, String>>
     ) : android.widget.BaseAdapter() {
-        override fun getCount() = items.size
-        override fun getItem(position: Int) = items[position]
-        override fun getItemId(position: Int) = position.toLong()
+        override fun getCount(): Int = items.size
+        override fun getItem(position: Int): Any = items[position]
+        override fun getItemId(position: Int): Long = position.toLong()
         
-        override fun getView(position: Int, convertView: View?, parent: View?): View {
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
             val view = convertView ?: layoutInflater.inflate(android.R.layout.simple_list_item_2, parent, false)
             val text1 = view.findViewById<TextView>(android.R.id.text1)
             val text2 = view.findViewById<TextView>(android.R.id.text2)
