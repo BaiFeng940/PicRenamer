@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.view.View
 import android.view.ViewGroup
@@ -20,7 +21,6 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.batchrenamer.databinding.ActivityMainBinding
 import java.io.File
-import java.io.FileInputStream
 
 // 简单的数据类
 data class FileInfo(
@@ -158,17 +158,18 @@ class MainActivity : AppCompatActivity() {
             
             for ((index, uri) in uris.withIndex()) {
                 try {
-                    val fileInfo = getFileInfo(uri)
-                    if (fileInfo != null) {
-                        val item = ImageItem(
-                            id = fileInfo.id + index,
-                            uri = uri,
-                            path = getRealPathFromUri(uri) ?: uri.toString(),
-                            name = fileInfo.name,
-                            size = fileInfo.size
-                        )
-                        newItems.add(item)
-                    }
+                    // 直接使用 URI 和文件名，不依赖真实路径
+                    val name = getFileNameFromUri(uri) ?: "image_$index.jpg"
+                    val size = getFileSizeFromUri(uri)
+                    
+                    val item = ImageItem(
+                        id = System.currentTimeMillis() + index,
+                        uri = uri,
+                        path = uri.toString(), // 保存 URI 字符串
+                        name = name,
+                        size = size ?: 0
+                    )
+                    newItems.add(item)
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -179,10 +180,40 @@ class MainActivity : AppCompatActivity() {
                 adapter.submitList(imageList.toList())
                 updateImageCount()
                 Toast.makeText(this, "已添加 ${newItems.size} 张图片", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "未能加载图片", Toast.LENGTH_SHORT).show()
             }
         } catch (e: Exception) {
             Toast.makeText(this, "处理失败：${e.message}", Toast.LENGTH_SHORT).show()
             e.printStackTrace()
+        }
+    }
+    
+    private fun getFileNameFromUri(uri: Uri): String? {
+        return try {
+            val cursor = contentResolver.query(uri, null, null, null, null)
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    val idx = it.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME)
+                    it.getString(idx)
+                } else null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+    
+    private fun getFileSizeFromUri(uri: Uri): Long? {
+        return try {
+            val cursor = contentResolver.query(uri, null, null, null, null)
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    val idx = it.getColumnIndexOrThrow(OpenableColumns.SIZE)
+                    it.getLong(idx)
+                } else null
+            }
+        } catch (e: Exception) {
+            null
         }
     }
     
@@ -318,33 +349,81 @@ class MainActivity : AppCompatActivity() {
             var failed = 0
             val results = mutableListOf<String>()
             
+            // 提示用户选择输出文件夹
+            val intent = android.content.Intent(android.app.action.ACTION_OPEN_DOCUMENT_TREE)
+            intent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            folderPickerLauncher.launch(intent)
+            
+            // 保存参数以便后续使用
+            pendingRenameItems = items
+            pendingRenameParams = params
+            
+        } catch (e: Exception) {
+            Toast.makeText(this, "重命名失败：${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+    
+    private var pendingRenameItems: List<ImageItem> = emptyList()
+    private var pendingRenameParams: RenameParams? = null
+    
+    private val folderPickerLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri ->
+        if (treeUri != null && pendingRenameParams != null) {
+            // 获取持久化权限
+            contentResolver.takePersistableUriPermission(
+                treeUri,
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or 
+                android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            
+            // 执行重命名（复制到新文件夹）
+            executeRenameInFolder(treeUri, pendingRenameItems!!, pendingRenameParams!!)
+        }
+    }
+    
+    private fun executeRenameInFolder(treeUri: Uri, items: List<ImageItem>, params: RenameParams) {
+        var success = 0
+        var failed = 0
+        
+        try {
+            val docFile = android.provider.DocumentsContract.buildDocumentUriUsingTree(
+                treeUri,
+                android.provider.DocumentsContract.getTreeDocumentId(treeUri)
+            )
+            
             for ((index, item) in items.withIndex()) {
                 try {
                     val num = (params.start + index).toString().padStart(params.length, '0')
                     val ext = if (params.format == "原格式") item.getExtension() else params.format
                     val newName = "${params.prefix}${num}${params.suffix}.$ext"
                     
-                    val oldFile = File(item.path)
-                    val newFile = File(oldFile.parent, newName)
+                    // 复制文件到新位置
+                    val newDocUri = android.provider.DocumentsContract.createFile(
+                        contentResolver,
+                        treeUri,
+                        "image/$ext",
+                        newName
+                    )
                     
-                    var finalFile = newFile
-                    var counter = 1
-                    while (finalFile.exists() && finalFile != oldFile) {
-                        val baseName = newFile.nameWithoutExtension
-                        finalFile = File(oldFile.parent, "${baseName}_$counter.$ext")
-                        counter++
-                    }
-                    
-                    if (oldFile.renameTo(finalFile)) {
+                    if (newDocUri != null) {
+                        // 读取原文件
+                        val inputStream = contentResolver.openInputStream(item.uri)
+                        val outputStream = contentResolver.openOutputStream(newDocUri)
+                        
+                        inputStream?.use { input ->
+                            outputStream?.use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                        
                         success++
-                        results.add("✅ ${item.name} → ${finalFile.name}")
                     } else {
                         failed++
-                        results.add("❌ ${item.name}: 重命名失败")
                     }
                 } catch (e: Exception) {
                     failed++
-                    results.add("❌ ${item.name}: ${e.message}")
+                    e.printStackTrace()
                 }
             }
             
