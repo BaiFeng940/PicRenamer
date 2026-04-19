@@ -389,23 +389,18 @@ class MainActivity : AppCompatActivity() {
             AppLogger.i("图片数量：${items.size}")
             AppLogger.i("前缀：${params.prefix}, 后缀：${params.suffix}, 位数：${params.length}, 起始：${params.start}, 格式：${params.format}")
             
-            // 检查是否有真实路径
-            val itemsWithPath = items.filter { File(it.path).exists() }
-            
-            if (itemsWithPath.isEmpty()) {
-                Toast.makeText(this, "没有可访问的图片文件", Toast.LENGTH_LONG).show()
-                AppLogger.w("没有可访问的图片文件")
+            // 使用第一个图片的目录作为输出目录
+            val firstItem = items.firstOrNull()
+            if (firstItem == null) {
+                Toast.makeText(this, "没有图片", Toast.LENGTH_SHORT).show()
                 return
             }
             
-            if (itemsWithPath.size < items.size) {
-                Toast.makeText(this, "部分图片无法访问，将跳过 ${items.size - itemsWithPath.size} 张", Toast.LENGTH_SHORT).show()
-            }
-            
-            // 直接使用原文件夹，不选择新文件夹
-            val outputDir = File(itemsWithPath[0].path).parentFile
+            // 尝试获取输出目录
+            val outputDir = getOutputDirectory(firstItem)
             if (outputDir == null) {
                 Toast.makeText(this, "无法确定输出目录", Toast.LENGTH_SHORT).show()
+                AppLogger.e("无法确定输出目录")
                 return
             }
             
@@ -415,7 +410,7 @@ class MainActivity : AppCompatActivity() {
             var failed = 0
             val results = mutableListOf<String>()
             
-            for ((index, item) in itemsWithPath.withIndex()) {
+            for ((index, item) in items.withIndex()) {
                 try {
                     val num = (params.start + index).toString().padStart(params.length, '0')
                     val ext = if (params.format == "原格式") item.getExtension() else params.format
@@ -423,27 +418,32 @@ class MainActivity : AppCompatActivity() {
                     
                     AppLogger.i("[$index] 处理：${item.name} → $newName")
                     
-                    val oldFile = File(item.path)
                     val newFile = File(outputDir, newName)
                     
                     // 处理文件名冲突
                     var finalFile = newFile
                     var counter = 1
-                    while (finalFile.exists() && finalFile != oldFile) {
+                    while (finalFile.exists()) {
                         val baseName = newFile.nameWithoutExtension
                         finalFile = File(outputDir, "${baseName}_$counter.$ext")
                         counter++
                     }
                     
-                    // 复制文件而不是重命名（更安全）
-                    if (copyFile(oldFile, finalFile)) {
+                    // 使用 ContentResolver 复制文件（支持 content:// URI）
+                    if (copyFileFromUri(item.uri, finalFile)) {
                         success++
                         results.add("✅ ${item.name} → ${finalFile.name}")
                         AppLogger.i("[$index] 成功：${finalFile.name}")
                         
-                        // 删除原文件
-                        if (oldFile != finalFile) {
-                            oldFile.delete()
+                        // 尝试删除原文件（如果有权限）
+                        try {
+                            val oldFile = File(item.path)
+                            if (oldFile.exists() && oldFile != finalFile) {
+                                oldFile.delete()
+                                AppLogger.i("已删除原文件：${oldFile.name}")
+                            }
+                        } catch (e: Exception) {
+                            AppLogger.w("无法删除原文件：${e.message}")
                         }
                     } else {
                         failed++
@@ -479,18 +479,50 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    private fun copyFile(source: File, destination: File): Boolean {
+    private fun getOutputDirectory(firstItem: ImageItem): File? {
+        // 尝试从路径获取目录
+        if (firstItem.path.startsWith("/")) {
+            val file = File(firstItem.path)
+            if (file.exists()) {
+                return file.parentFile
+            }
+        }
+        
+        // 尝试使用外部存储目录
+        val externalDirs = getExternalFilesDirs(null)
+        if (externalDirs.isNotEmpty() && externalDirs[0] != null) {
+            val downloadDir = File(externalDirs[0], "RenamedImages")
+            if (!downloadDir.exists()) {
+                downloadDir.mkdirs()
+            }
+            AppLogger.i("使用备用目录：$downloadDir")
+            return downloadDir
+        }
+        
+        return null
+    }
+    
+    private fun copyFileFromUri(uri: Uri, destination: File): Boolean {
         return try {
-            val input = FileInputStream(source)
-            val output = FileOutputStream(destination)
-            input.use { input ->
-                output.use { output ->
+            // 使用 ContentResolver 打开输入流（支持 content:// 和 file://）
+            val inputStream = contentResolver.openInputStream(uri)
+            if (inputStream == null) {
+                AppLogger.e("无法打开输入流：$uri")
+                return false
+            }
+            
+            val outputStream = FileOutputStream(destination)
+            
+            inputStream.use { input ->
+                outputStream.use { output ->
                     input.copyTo(output)
                 }
             }
+            
+            AppLogger.i("复制成功：${destination.name}")
             true
         } catch (e: Exception) {
-            AppLogger.e("复制文件失败：${source.name} → ${destination.name}", e)
+            AppLogger.e("复制文件失败：${destination.name}", e)
             false
         }
     }
