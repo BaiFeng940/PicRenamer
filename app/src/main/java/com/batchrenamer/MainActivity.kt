@@ -177,11 +177,11 @@ class MainActivity : AppCompatActivity() {
                     val fileInfo = getFileInfo(uri)
                     if (fileInfo != null) {
                         val item = ImageItem(
-                            id = fileInfo.first,
+                            id = fileInfo.id,
                             uri = uri,
-                            path = fileInfo.second,
-                            name = fileInfo.third,
-                            size = fileInfo.fourth
+                            path = fileInfo.path,
+                            name = fileInfo.name,
+                            size = fileInfo.size
                         )
                         newItems.add(item)
                     }
