@@ -424,18 +424,20 @@ class MainActivity : AppCompatActivity() {
     private var pendingRenameParams: RenameParams? = null
     
     private val folderPickerLauncher = registerForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { treeUri ->
-        if (treeUri != null && pendingRenameParams != null) {
-            // 获取持久化权限
-            contentResolver.takePersistableUriPermission(
-                treeUri,
-                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or 
-                android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            )
-            
-            // 执行重命名（复制到新文件夹）
-            executeRenameInFolder(treeUri, pendingRenameItems!!, pendingRenameParams!!)
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK && result.data != null) {
+            val treeUri = result.data?.data
+            if (treeUri != null && pendingRenameParams != null) {
+                // 获取持久化权限
+                contentResolver.takePersistableUriPermission(
+                    treeUri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+                
+                // 执行重命名（复制到新文件夹）
+                executeRenameInFolder(treeUri, pendingRenameItems!!, pendingRenameParams!!)
+            }
         }
     }
     
@@ -455,7 +457,7 @@ class MainActivity : AppCompatActivity() {
                     
                     AppLogger.i("[$index] 处理：${item.name} → $newName")
                     
-                    val newDocUri = DocumentsContract.createFile(
+                    val newDocUri = android.provider.DocumentsContract.createFile(
                         contentResolver,
                         treeUri,
                         "image/*",
