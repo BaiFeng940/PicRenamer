@@ -72,12 +72,16 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun setupExampleListener() {
-        val listener = { updateExample() }
+        val listener = object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { updateExample() }
+            override fun afterTextChanged(s: android.text.Editable?) {}
+        }
         
-        binding.etPrefix.addTextChangedListener { listener() }
-        binding.etSuffix.addTextChangedListener { listener() }
-        binding.etNameLength.addTextChangedListener { listener() }
-        binding.etStartNumber.addTextChangedListener { listener() }
+        binding.etPrefix.addTextChangedListener(listener)
+        binding.etSuffix.addTextChangedListener(listener)
+        binding.etNameLength.addTextChangedListener(listener)
+        binding.etStartNumber.addTextChangedListener(listener)
         binding.spinnerFormat.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
                 updateExample()
