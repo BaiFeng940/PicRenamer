@@ -1,41 +1,53 @@
 package com.batchrenamer
 
 import android.Manifest
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Environment
-import android.provider.Settings
-import android.view.LayoutInflater
+import android.provider.OpenableColumns
 import android.view.View
 import android.widget.ArrayAdapter
-import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
 import com.batchrenamer.databinding.ActivityMainBinding
-import com.batchrenamer.databinding.DialogPreviewBinding
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.io.File
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
-    private var selectedFolder: File? = null
-    private var imageFiles: List<File> = emptyList()
-    
-    private val imageExtensions = arrayOf(
-        "jpg", "jpeg", "png", "gif", "bmp", "webp", "heic", "heif",
-        "tiff", "tif", "svg", "ico", "raw", "cr2", "nef", "arw"
-    )
+    private val imageList = mutableListOf<ImageItem>()
+    private lateinit var adapter: ImageAdapter
     
     private val outputFormats = arrayOf("jpg", "png", "webp", "bmp", "原格式")
     
-    private val PERMISSION_REQUEST_CODE = 100
+    // 图片选择器
+    private val pickImagesLauncher = registerForActivityResult(
+        ActivityResultContracts.GetMultipleContents()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            processSelectedImages(uris)
+        }
+    }
+    
+    // 权限请求
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            pickImagesLauncher.launch("image/*")
+        } else {
+            Toast.makeText(this, "需要存储权限才能选择图片", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,21 +55,26 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
         
         setupUI()
-        checkPermissions()
+        setupRecyclerView()
     }
     
     private fun setupUI() {
-        // 文件夹选择
-        binding.btnSelectFolder.setOnClickListener {
-            selectFolder()
+        // 选择图片按钮
+        binding.btnSelectImages.setOnClickListener {
+            checkPermissionAndPickImages()
         }
         
-        // 预览按钮
+        // 智能排序
+        binding.btnSmartSort.setOnClickListener {
+            smartSortImages()
+        }
+        
+        // 预览
         binding.btnPreview.setOnClickListener {
             showPreview()
         }
         
-        // 重命名按钮
+        // 重命名
         binding.btnRename.setOnClickListener {
             confirmAndRename()
         }
@@ -66,145 +83,278 @@ class MainActivity : AppCompatActivity() {
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, outputFormats)
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         binding.spinnerFormat.adapter = adapter
-        
-        // 监听设置变化，更新示例
-        setupExampleListener()
     }
     
-    private fun setupExampleListener() {
-        val listener = object : android.text.TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { updateExample() }
-            override fun afterTextChanged(s: android.text.Editable?) {}
-        }
-        
-        binding.etPrefix.addTextChangedListener(listener)
-        binding.etSuffix.addTextChangedListener(listener)
-        binding.etNameLength.addTextChangedListener(listener)
-        binding.etStartNumber.addTextChangedListener(listener)
-        binding.spinnerFormat.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
-                updateExample()
+    private fun setupRecyclerView() {
+        adapter = ImageAdapter(
+            onItemClick = { item, position ->
+                // 点击切换选择状态
+                item.isSelected = !item.isSelected
+                adapter.notifyItemChanged(position)
+                updateImageCount()
+            },
+            onSelectionChanged = { item, isSelected ->
+                item.isSelected = isSelected
+                updateImageCount()
             }
-            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
-        }
+        )
+        
+        binding.rvImages.layoutManager = LinearLayoutManager(this)
+        binding.rvImages.adapter = adapter
+        
+        // 添加拖拽排序
+        setupItemTouchHelper()
     }
     
-    private fun updateExample() {
-        val prefix = binding.etPrefix.text.toString()
-        val length = binding.etNameLength.text.toString().toIntOrNull() ?: 3
-        val start = binding.etStartNumber.text.toString().toIntOrNull() ?: 1
-        val format = outputFormats[binding.spinnerFormat.selectedItemPosition]
-        
-        val num = start.toString().padStart(length, '0')
-        val ext = if (format == "原格式") "jpg" else format
-        val example = "${prefix}${num}${binding.etSuffix.text.toString()}.$ext"
-        
-        binding.tvExample.text = "示例：$example"
-    }
-    
-    private fun checkPermissions() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Android 11+ 需要管理所有文件权限
-            if (!Environment.isExternalStorageManager()) {
-                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
-                intent.data = Uri.parse("package:$packageName")
-                startActivity(intent)
+    private fun setupItemTouchHelper() {
+        val itemTouchHelper = ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(
+            ItemTouchHelper.UP or ItemTouchHelper.DOWN, 0
+        ) {
+            override fun onMove(
+                recyclerView: RecyclerView,
+                viewHolder: RecyclerView.ViewHolder,
+                target: RecyclerView.ViewHolder
+            ): Boolean {
+                val fromPosition = viewHolder.adapterPosition
+                val toPosition = target.adapterPosition
+                
+                // 交换列表中的元素
+                val temp = imageList[fromPosition]
+                imageList[fromPosition] = imageList[toPosition]
+                imageList[toPosition] = temp
+                
+                adapter.notifyItemMoved(fromPosition, toPosition)
+                return true
             }
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // Android 13+ 使用媒体权限
+            
+            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
+                // 不支持滑动删除
+            }
+        })
+        itemTouchHelper.attachToRecyclerView(binding.rvImages)
+    }
+    
+    private fun checkPermissionAndPickImages() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Android 13+
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) 
-                != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(
-                    this,
-                    arrayOf(Manifest.permission.READ_MEDIA_IMAGES),
-                    PERMISSION_REQUEST_CODE
-                )
+                == PackageManager.PERMISSION_GRANTED) {
+                pickImagesLauncher.launch("image/*")
+            } else {
+                requestPermissionLauncher.launch(Manifest.permission.READ_MEDIA_IMAGES)
             }
         } else {
             // Android 12 及以下
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) 
-                != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(
-                    this,
-                    arrayOf(
-                        Manifest.permission.READ_EXTERNAL_STORAGE,
-                        Manifest.permission.WRITE_EXTERNAL_STORAGE
-                    ),
-                    PERMISSION_REQUEST_CODE
-                )
+                == PackageManager.PERMISSION_GRANTED) {
+                pickImagesLauncher.launch("image/*")
+            } else {
+                requestPermissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
             }
         }
     }
     
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == PERMISSION_REQUEST_CODE) {
-            if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-                // 权限已授予
-            }
-        }
-    }
-    
-    private fun selectFolder() {
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-        startActivityForResult(intent, 200)
-    }
-    
-    @Deprecated("Deprecated in Java")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
+    private fun processSelectedImages(uris: List<Uri>) {
+        showLoading("正在加载图片...")
         
-        if (requestCode == 200 && resultCode == RESULT_OK) {
-            data?.data?.let { uri ->
-                // 保存 URI 权限
-                contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-                
-                // 获取文件夹路径
-                val path = getFullPathFromTreeUri(uri)
-                selectedFolder = File(path ?: uri.toString())
-                
-                binding.tvFolderPath.text = selectedFolder?.absolutePath ?: "未选择"
-                
-                // 加载图片文件
-                loadImages()
-            }
-        }
-    }
-    
-    private fun getFullPathFromTreeUri(treeUri: Uri): String? {
-        if (treeUri.path == null) return null
-        
-        var treePath = treeUri.path
-        if (treePath!!.contains("/document/tree:")) {
-            treePath = treePath.substring(treePath.indexOf("/document/tree:") + 15)
-        } else if (treePath.contains("/tree:")) {
-            treePath = treePath.substring(treePath.indexOf("/tree:") + 6)
-        }
-        
-        return Environment.getExternalStorageDirectory().absolutePath + "/" + treePath
-    }
-    
-    private fun loadImages() {
-        selectedFolder?.let { folder ->
-            if (folder.exists() && folder.isDirectory) {
-                imageFiles = folder.listFiles { file ->
-                    !file.isHidden && imageExtensions.any { ext ->
-                        file.name.endsWith(".$ext", ignoreCase = true)
+        // 在新线程中处理
+        Thread {
+            val newItems = mutableListOf<ImageItem>()
+            
+            for (uri in uris) {
+                try {
+                    val fileInfo = getFileInfo(uri)
+                    if (fileInfo != null) {
+                        val item = ImageItem(
+                            id = fileInfo.first,
+                            uri = uri,
+                            path = fileInfo.second,
+                            name = fileInfo.third,
+                            size = fileInfo.fourth
+                        )
+                        newItems.add(item)
                     }
-                }?.sortedBy { it.name } ?: emptyList()
-                
-                binding.tvFileCount.text = getString(R.string.file_count, imageFiles.size)
-                
-                if (imageFiles.isEmpty()) {
-                    showMessage("未找到图片文件")
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
             }
+            
+            runOnUiThread {
+                imageList.addAll(newItems)
+                adapter.submitList(imageList.toList())
+                updateImageCount()
+                hideLoading()
+                
+                // 自动检测数字
+                if (newItems.isNotEmpty()) {
+                    detectNumbersInImages(newItems)
+                }
+            }
+        }.start()
+    }
+    
+    private fun getFileInfo(uri: Uri): Quad<Long, String, String, Long>? {
+        return try {
+            val cursor = contentResolver.query(uri, null, null, null, null)
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    val id = it.getLong(it.getColumnIndexOrThrow("_id"))
+                    val displayName = it.getString(it.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME))
+                    val size = it.getLong(it.getColumnIndexOrThrow(OpenableColumns.SIZE))
+                    
+                    // 获取真实路径
+                    val path = getRealPathFromUri(uri) ?: uri.path ?: ""
+                    
+                    Quad(id, path, displayName, size)
+                } else null
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
         }
+    }
+    
+    private fun getRealPathFromUri(uri: Uri): String? {
+        return try {
+            val cursor = contentResolver.query(uri, null, null, null, null)
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    val idx = it.getColumnIndex("_data")
+                    if (idx != -1) it.getString(idx) else null
+                } else null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+    
+    private fun detectNumbersInImages(images: List<ImageItem>) {
+        showLoading("正在识别图片数字...")
+        
+        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        var processed = 0
+        
+        for (item in images) {
+            try {
+                val file = File(item.path)
+                if (file.exists()) {
+                    val image = InputImage.fromFilePath(this, file)
+                    recognizer.process(image)
+                        .addOnSuccessListener { visionText ->
+                            // 从识别的文本中提取数字
+                            val number = extractNumberFromText(visionText.text)
+                            item.detectedNumber = number
+                            
+                            processed++
+                            if (processed == images.size) {
+                                adapter.submitList(imageList.toList())
+                                hideLoading()
+                            }
+                        }
+                        .addOnFailureListener {
+                            processed++
+                            if (processed == images.size) {
+                                hideLoading()
+                            }
+                        }
+                } else {
+                    processed++
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                processed++
+            }
+        }
+        
+        if (processed == images.size) {
+            hideLoading()
+        }
+    }
+    
+    private fun extractNumberFromText(text: String): Int? {
+        // 从文本中提取数字（支持多种格式）
+        val regex = Regex("\\d+")
+        val matches = regex.findAll(text)
+        
+        // 尝试找到最可能是标识符的数字
+        for (match in matches) {
+            val num = match.value.toIntOrNull()
+            if (num != null && num > 0 && num < 100000) {
+                return num
+            }
+        }
+        
+        return null
+    }
+    
+    private fun smartSortImages() {
+        // 按检测到的数字排序
+        val sorted = imageList.sortedWith(compareBy({ it.detectedNumber == null }, { it.detectedNumber ?: 0 }))
+        
+        imageList.clear()
+        imageList.addAll(sorted)
+        adapter.submitList(imageList.toList())
+        
+        val detectedCount = imageList.count { it.detectedNumber != null }
+        Toast.makeText(this, "已按检测到的数字排序（$detectedCount 张图片有数字标识）", Toast.LENGTH_LONG).show()
+    }
+    
+    private fun updateImageCount() {
+        val selectedCount = imageList.count { it.isSelected }
+        binding.tvImageCount.text = "已选择 $selectedCount / ${imageList.size} 张图片"
+        
+        // 更新空视图
+        if (imageList.isEmpty()) {
+            binding.emptyView.visibility = View.VISIBLE
+            binding.rvImages.visibility = View.GONE
+        } else {
+            binding.emptyView.visibility = View.GONE
+            binding.rvImages.visibility = View.VISIBLE
+        }
+    }
+    
+    private fun showPreview() {
+        if (imageList.isEmpty()) {
+            Toast.makeText(this, "请先选择图片", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        val selectedItems = imageList.filter { it.isSelected }
+        if (selectedItems.isEmpty()) {
+            Toast.makeText(this, "请至少选择一张图片", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        val params = getRenameParams()
+        val previewList = selectedItems.mapIndexed { index, item ->
+            val num = (params.start + index).toString().padStart(params.length, '0')
+            val ext = if (params.format == "原格式") item.getExtension() else params.format
+            val newName = "${params.prefix}${num}${params.suffix}.$ext"
+            Pair(item.name, newName)
+        }
+        
+        // 显示预览对话框
+        val builder = AlertDialog.Builder(this)
+            .setTitle("重命名预览")
+            .setAdapter(PreviewAdapter(previewList), null)
+            .setPositiveButton("确认", null)
+            .setNegativeButton("取消", null)
+        
+        val dialog = builder.create()
+        dialog.show()
+        
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            dialog.dismiss()
+            executeRename(selectedItems, params)
+        }
+    }
+    
+    private fun confirmAndRename() {
+        if (imageList.isEmpty()) {
+            Toast.makeText(this, "请先选择图片", Toast.LENGTH_SHORT).show()
+            return
+        }
+        showPreview()
     }
     
     private fun getRenameParams(): RenameParams {
@@ -218,98 +368,70 @@ class MainActivity : AppCompatActivity() {
         return RenameParams(prefix, suffix, length, start, format)
     }
     
-    private fun generateNewName(oldFile: File, index: Int, params: RenameParams): String {
-        val num = (params.start + index).toString().padStart(params.length, '0')
-        val nameWithoutExt = oldFile.nameWithoutExtension
+    private fun executeRename(items: List<ImageItem>, params: RenameParams) {
+        showLoading("正在重命名...")
         
-        // 处理扩展名
-        val ext = if (params.format == "原格式") {
-            oldFile.extension
-        } else {
-            params.format
-        }
-        
-        return "${params.prefix}${num}${params.suffix}.$ext"
-    }
-    
-    private fun showPreview() {
-        if (imageFiles.isEmpty()) {
-            showMessage("请先选择文件夹")
-            return
-        }
-        
-        val params = getRenameParams()
-        val previewList = imageFiles.mapIndexed { index, file ->
-            Pair(file.name, generateNewName(file, index, params))
-        }
-        
-        // 显示预览对话框
-        val dialogBinding = DialogPreviewBinding.inflate(LayoutInflater.from(this))
-        val dialog = AlertDialog.Builder(this)
-            .setView(dialogBinding.root)
-            .create()
-        
-        dialogBinding.rvPreview.layoutManager = LinearLayoutManager(this)
-        dialogBinding.rvPreview.adapter = PreviewAdapter(previewList)
-        
-        dialogBinding.btnCancel.setOnClickListener { dialog.dismiss() }
-        dialogBinding.btnConfirm.setOnClickListener { 
-            dialog.dismiss()
-            executeRename(params)
-        }
-        
-        dialog.show()
-    }
-    
-    private fun confirmAndRename() {
-        if (imageFiles.isEmpty()) {
-            showMessage("请先选择文件夹")
-            return
-        }
-        showPreview()
-    }
-    
-    private fun executeRename(params: RenameParams) {
-        var success = 0
-        var failed = 0
-        
-        imageFiles.forEachIndexed { index, oldFile ->
-            try {
-                val newName = generateNewName(oldFile, index, params)
-                val newFile = File(oldFile.parent, newName)
-                
-                // 处理文件名冲突
-                var finalFile = newFile
-                var counter = 1
-                while (finalFile.exists() && finalFile != oldFile) {
-                    val baseName = newFile.nameWithoutExtension
-                    val ext = newFile.extension
-                    finalFile = File(oldFile.parent, "${baseName}_$counter.$ext")
-                    counter++
-                }
-                
-                if (oldFile.renameTo(finalFile)) {
-                    success++
-                } else {
+        Thread {
+            var success = 0
+            var failed = 0
+            val results = mutableListOf<String>()
+            
+            for ((index, item) in items.withIndex()) {
+                try {
+                    val num = (params.start + index).toString().padStart(params.length, '0')
+                    val ext = if (params.format == "原格式") item.getExtension() else params.format
+                    val newName = "${params.prefix}${num}${params.suffix}.$ext"
+                    
+                    val oldFile = File(item.path)
+                    val newFile = File(oldFile.parent, newName)
+                    
+                    // 处理文件名冲突
+                    var finalFile = newFile
+                    var counter = 1
+                    while (finalFile.exists() && finalFile != oldFile) {
+                        val baseName = newFile.nameWithoutExtension
+                        finalFile = File(oldFile.parent, "${baseName}_$counter.$ext")
+                        counter++
+                    }
+                    
+                    if (oldFile.renameTo(finalFile)) {
+                        success++
+                        results.add("✅ ${item.name} → ${finalFile.name}")
+                    } else {
+                        failed++
+                        results.add("❌ ${item.name}: 重命名失败")
+                    }
+                } catch (e: Exception) {
                     failed++
+                    results.add("❌ ${item.name}: ${e.message}")
                 }
-            } catch (e: Exception) {
-                failed++
-                e.printStackTrace()
             }
-        }
-        
-        showMessage("重命名完成！成功：$success, 失败：$failed")
-        
-        // 重新加载文件列表
-        loadImages()
+            
+            runOnUiThread {
+                hideLoading()
+                
+                val message = "重命名完成！\n成功：$success\n失败：$failed\n\n" + results.joinToString("\n")
+                AlertDialog.Builder(this)
+                    .setTitle("重命名结果")
+                    .setMessage(message)
+                    .setPositiveButton("确定") { _, _ ->
+                        // 清空列表
+                        imageList.clear()
+                        adapter.submitList(emptyList())
+                        updateImageCount()
+                    }
+                    .show()
+            }
+        }.start()
     }
     
-    private fun showMessage(msg: String) {
-        androidx.appcompat.app.AlertDialog.Builder(this)
-            .setMessage(msg)
-            .setPositiveButton("确定", null)
-            .show()
+    private fun showLoading(message: String) {
+        // 简单实现，可以用 ProgressDialog
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    }
+    
+    private fun hideLoading() {
+        // 隐藏加载提示
     }
     
     data class RenameParams(
@@ -322,24 +444,20 @@ class MainActivity : AppCompatActivity() {
     
     inner class PreviewAdapter(
         private val items: List<Pair<String, String>>
-    ) : RecyclerView.Adapter<PreviewAdapter.ViewHolder>() {
+    ) : android.widget.BaseAdapter() {
+        override fun getCount() = items.size
+        override fun getItem(position: Int) = items[position]
+        override fun getItemId(position: Int) = position.toLong()
         
-        inner class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
-            val tvOldName: TextView = view.findViewById(R.id.tvOldName)
-            val tvNewName: TextView = view.findViewById(R.id.tvNewName)
+        override fun getView(position: Int, convertView: View?, parent: View?): View {
+            val view = convertView ?: layoutInflater.inflate(android.R.layout.simple_list_item_2, parent, false)
+            val text1 = view.findViewById<TextView>(android.R.id.text1)
+            val text2 = view.findViewById<TextView>(android.R.id.text2)
+            
+            text1.text = items[position].first
+            text2.text = "→ ${items[position].second}"
+            
+            return view
         }
-        
-        override fun onCreateViewHolder(parent: android.view.ViewGroup, viewType: Int): ViewHolder {
-            val view = LayoutInflater.from(parent.context)
-                .inflate(R.layout.item_rename_preview, parent, false)
-            return ViewHolder(view)
-        }
-        
-        override fun onBindViewHolder(holder: ViewHolder, position: Int) {
-            holder.tvOldName.text = items[position].first
-            holder.tvNewName.text = "→ ${items[position].second}"
-        }
-        
-        override fun getItemCount() = items.size
     }
 }
